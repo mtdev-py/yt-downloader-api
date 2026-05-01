@@ -29,52 +29,64 @@ def safe_content_disposition(filename: str) -> str:
         utf8_name  = quote(filename, safe="")
         return f'attachment; filename="{ascii_name}"; filename*=UTF-8\'\'{utf8_name}'
 
-def base_ydl_opts(tmpdir=None):
+# Clientes a tentar em sequência (funciona em servidor cloud sem cookies)
+YT_CLIENTS = [
+    ["ios"],
+    ["android_embedded"],
+    ["web_creator"],
+    ["tv_embedded"],
+    ["android", "web"],
+]
+
+def base_ydl_opts(tmpdir=None, player_clients=None):
     opts = {
         "quiet": True,
         "no_warnings": True,
         "extractor_args": {
             "youtube": {
-                "player_client": ["android", "web"],
+                "player_client": player_clients or ["ios"],
                 "player_skip": ["webpage", "configs"],
             }
         },
         "http_headers": {
             "User-Agent": (
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "Mozilla/5.0 (Linux; Android 14; Pixel 8) "
                 "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/124.0.0.0 Safari/537.36"
+                "Chrome/124.0.6367.82 Mobile Safari/537.36"
             ),
         },
-        "retries": 10,
-        "fragment_retries": 10,
+        "retries": 5,
+        "fragment_retries": 5,
     }
     if tmpdir:
         opts["outtmpl"] = os.path.join(tmpdir, "%(title)s.%(ext)s")
     return opts
 
 def try_extract(url, opts):
-    """Tenta extrair sem cookies, depois tenta cada navegador."""
-    try:
-        with yt_dlp.YoutubeDL(opts) as ydl:
-            return ydl.extract_info(url, download="outtmpl" in opts and not opts.get("skip_download", False))
-    except yt_dlp.utils.DownloadError as e:
-        if "Sign in" not in str(e) and "bot" not in str(e):
-            raise
+    """Tenta múltiplos player_clients do YouTube até um funcionar."""
+    last_error = None
 
-    for browser in BROWSERS:
+    for clients in YT_CLIENTS:
         try:
             opts_copy = dict(opts)
-            opts_copy["cookiesfrombrowser"] = (browser, None, None, None)
+            opts_copy["extractor_args"] = {
+                "youtube": {
+                    "player_client": clients,
+                    "player_skip": ["webpage", "configs"],
+                }
+            }
             with yt_dlp.YoutubeDL(opts_copy) as ydl:
-                return ydl.extract_info(url, download="outtmpl" in opts_copy and not opts_copy.get("skip_download", False))
+                is_download = "outtmpl" in opts_copy and not opts_copy.get("skip_download", False)
+                return ydl.extract_info(url, download=is_download)
         except Exception as e:
-            err = str(e)
-            if any(k in err for k in ["Sign in", "bot", "cookie", "could not", "Cannot"]):
-                continue
-            raise
+            last_error = e
+            continue
 
-    raise Exception("Não foi possível autenticar. Abra o YouTube no navegador, faça login, feche o navegador e tente novamente.")
+    raise Exception(
+        f"Não foi possível processar o vídeo. "
+        f"Pode ser conteúdo restrito ou temporariamente indisponível. "
+        f"Detalhe: {last_error}"
+    )
 
 @app.route("/")
 def index():
