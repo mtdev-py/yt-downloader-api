@@ -41,6 +41,7 @@ def base_ydl_opts(tmpdir=None, cookie_file=None):
     opts = {
         "quiet": True,
         "no_warnings": True,
+        "format": "best",
         "retries": 5,
         "fragment_retries": 5,
     }
