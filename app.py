@@ -110,6 +110,14 @@ def info():
     if not url:
         return jsonify({"error": "URL not provided"}), 400
 
+    # Debug: log cookie status
+    cookie_lines = [l for l in cookies_txt.split("\n") if l.strip() and not l.startswith("#")] if cookies_txt else []
+    print(f"[info] URL: {url}")
+    print(f"[info] Cookies received: {len(cookie_lines)} entries, {len(cookies_txt)} bytes")
+    if cookie_lines:
+        cookie_names = [l.split("\t")[5] if len(l.split("\t")) > 5 else "?" for l in cookie_lines[:5]]
+        print(f"[info] Sample cookie names: {cookie_names}")
+
     cookie_file = write_cookie_file(cookies_txt)
     try:
         opts = base_ydl_opts(cookie_file=cookie_file)
