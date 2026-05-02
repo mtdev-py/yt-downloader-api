@@ -28,12 +28,13 @@ def safe_content_disposition(filename: str) -> str:
         return f'attachment; filename="{ascii_name}"; filename*=UTF-8\'\'{utf8_name}'
 
 # Clientes a tentar em sequência
+# Com cookies, 'web' tem todos os formatos; sem cookies, fallback para mobile clients
 YT_CLIENTS = [
+    ["web"],
+    ["android"],
     ["ios"],
-    ["android_embedded"],
     ["web_creator"],
     ["tv_embedded"],
-    ["android", "web"],
 ]
 
 def write_cookie_file(cookies_txt):
@@ -159,7 +160,7 @@ def download():
         opts = base_ydl_opts(tmpdir, cookie_file=cookie_file)
 
         if mode == "audio":
-            opts["format"] = "bestaudio[ext=webm]/bestaudio[ext=m4a]/bestaudio/best"
+            opts["format"] = "bestaudio/best"
             opts["postprocessors"] = [
                 {"key": "FFmpegExtractAudio", "preferredcodec": fmt, "preferredquality": quality},
                 {"key": "FFmpegMetadata", "add_metadata": True},
@@ -167,7 +168,7 @@ def download():
             mime = "audio/mp4" if fmt == "m4a" else "audio/mpeg"
             ext  = fmt
         else:
-            opts["format"] = "bestvideo+bestaudio/best"
+            opts["format"] = "bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best"
             opts["merge_output_format"] = video_fmt
             mime = "video/mp4"
             ext  = video_fmt
