@@ -14,20 +14,15 @@ CORS(app)
 def sanitize_filename(name: str) -> str:
     name = unicodedata.normalize("NFKD", name)
     name = name.encode("ascii", "ignore").decode("ascii")
-    return "".join(c for c in name if c.isalnum() or c in " .-_()[]{}").strip()
+    return "".join(c for c in name if c.isalnum() or c in " .-_()[]{}").strip() or "download"
 
 def safe_content_disposition(filename: str) -> str:
-    try:
-        filename.encode("latin-1")
-        return f'attachment; filename="{filename}"'
-    except UnicodeEncodeError:
-        from urllib.parse import quote
-        ascii_name = unicodedata.normalize("NFKD", filename).encode("ascii", "ignore").decode("ascii").strip()
-        utf8_name = quote(filename, safe="")
-        return f'attachment; filename="{ascii_name}"; filename*=UTF-8\'\'{utf8_name}'
+    from urllib.parse import quote
+    ascii_name = unicodedata.normalize("NFKD", filename).encode("ascii", "ignore").decode("ascii").strip() or "download"
+    utf8_name = quote(filename, safe="")
+    return f'attachment; filename="{ascii_name}"; filename*=UTF-8\'\'{utf8_name}'
 
 def write_cookie_file(cookies_txt):
-    """Cria cookiefile temporário. Caller é responsável por deletar."""
     if not cookies_txt or not cookies_txt.strip():
         return None
     tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False, encoding="utf-8")
@@ -36,28 +31,22 @@ def write_cookie_file(cookies_txt):
     return tmp.name
 
 def cleanup(cookie_file=None, tmpdir=None):
-    """Remove arquivos temporários."""
     if cookie_file and os.path.exists(cookie_file):
         os.unlink(cookie_file)
     if tmpdir and os.path.exists(tmpdir):
         shutil.rmtree(tmpdir, ignore_errors=True)
 
-def make_ydl_opts(cookie_file, tmpdir=None):
-    """Opções resilientes do yt-dlp conforme spec."""
+def make_opts(cookie_file, tmpdir=None, format_str="best"):
+    """Cria opções yt-dlp. SEM extractor_args — deixa yt-dlp decidir o client."""
     opts = {
         "quiet": True,
         "no_warnings": True,
         "retries": 5,
         "fragment_retries": 5,
-        "format": "bestvideo+bestaudio/best",
+        "format": format_str,
         "geo_bypass": True,
         "nocheckcertificate": True,
         "cookiefile": cookie_file,
-        "extractor_args": {
-            "youtube": {
-                "player_client": ["android", "ios", "web"],
-            }
-        },
     }
     if tmpdir:
         opts["outtmpl"] = os.path.join(tmpdir, "%(title)s.%(ext)s")
@@ -77,13 +66,13 @@ def info():
 
     if not url:
         return jsonify({"error": "URL not provided"}), 400
-
     if not cookies_txt or not cookies_txt.strip():
-        return jsonify({"error": "Cookies required. Please install Chrome extension and login to YouTube."}), 400
+        return jsonify({"error": "Cookies required. Install the Chrome extension and login to YouTube."}), 400
 
     cookie_file = write_cookie_file(cookies_txt)
     try:
-        opts = make_ydl_opts(cookie_file)
+        # Info: sem format, sem download — só metadados
+        opts = make_opts(cookie_file, format_str="best")
         opts["skip_download"] = True
 
         with yt_dlp.YoutubeDL(opts) as ydl:
@@ -115,44 +104,67 @@ def download():
 
     if not url:
         return jsonify({"error": "URL not provided"}), 400
-
     if not cookies_txt or not cookies_txt.strip():
-        return jsonify({"error": "Cookies required. Please install Chrome extension and login to YouTube."}), 400
+        return jsonify({"error": "Cookies required. Install the Chrome extension and login to YouTube."}), 400
 
     cookie_file = write_cookie_file(cookies_txt)
     tmpdir = tempfile.mkdtemp(prefix="dl_")
-    try:
-        opts = make_ydl_opts(cookie_file, tmpdir)
 
+    try:
+        # Determinar formatos a tentar (do mais específico ao mais genérico)
         if mode_ == "audio":
-            opts["format"] = "bestaudio/best"
-            opts["postprocessors"] = [
+            format_attempts = ["bestaudio/best", "best"]
+            postprocessors = [
                 {"key": "FFmpegExtractAudio", "preferredcodec": fmt, "preferredquality": quality},
                 {"key": "FFmpegMetadata", "add_metadata": True},
             ]
             mime = "audio/mp4" if fmt == "m4a" else "audio/mpeg"
             ext = fmt
         else:
-            opts["format"] = "bestvideo+bestaudio/best"
-            opts["merge_output_format"] = video_fmt
+            format_attempts = ["bestvideo+bestaudio/best", "bestvideo+bestaudio", "best"]
+            postprocessors = []
             mime = "video/mp4"
             ext = video_fmt
 
-        # Step 1: extract_info (download=False)
-        with yt_dlp.YoutubeDL(opts) as ydl:
-            info_dict = ydl.extract_info(url, download=False)
+        # Tentar cada formato até um funcionar
+        info_dict = None
+        last_error = None
 
-        # Step 2: download
-        with yt_dlp.YoutubeDL(opts) as ydl:
-            ydl.download([url])
+        for format_str in format_attempts:
+            try:
+                opts = make_opts(cookie_file, tmpdir, format_str)
+                if postprocessors:
+                    opts["postprocessors"] = postprocessors
+                if mode_ == "video":
+                    opts["merge_output_format"] = video_fmt
 
-        # Step 3: find file
+                # Step 1: extract_info
+                with yt_dlp.YoutubeDL(opts) as ydl:
+                    info_dict = ydl.extract_info(url, download=False)
+
+                # Step 2: download
+                with yt_dlp.YoutubeDL(opts) as ydl:
+                    ydl.download([url])
+
+                break  # sucesso
+            except Exception as e:
+                last_error = e
+                # Limpar tmpdir para a próxima tentativa
+                for f in os.listdir(tmpdir):
+                    try: os.unlink(os.path.join(tmpdir, f))
+                    except: pass
+                continue
+
+        if info_dict is None:
+            raise last_error or Exception("All format attempts failed")
+
+        # Step 3: encontrar arquivo
         with yt_dlp.YoutubeDL(opts) as ydl:
             filename = ydl.prepare_filename(info_dict)
 
         if not os.path.exists(filename):
             base = os.path.splitext(filename)[0]
-            for e in [ext, "mp3", "m4a", "mp4", "webm", "opus", "ogg"]:
+            for e in [ext, "mp3", "m4a", "mp4", "webm", "opus", "ogg", "mkv"]:
                 alt = f"{base}.{e}"
                 if os.path.exists(alt):
                     filename = alt
@@ -161,21 +173,24 @@ def download():
         if not os.path.exists(filename):
             files = [f for f in os.listdir(tmpdir) if not f.endswith(".part")]
             if files:
-                filename = os.path.join(tmpdir, sorted(files)[-1])
+                filename = os.path.join(tmpdir, sorted(files, key=lambda x: os.path.getsize(os.path.join(tmpdir, x)), reverse=True)[0])
 
         if not os.path.exists(filename):
-            return jsonify({"error": "File not found after download"}), 500
+            return jsonify({"error": "File not found after processing"}), 500
 
-        title = info_dict.get("title", "audio")
+        title = info_dict.get("title", "download")
         final_name = sanitize_filename(title) + f".{ext}"
-        if not final_name.strip(f".{ext}"):
-            final_name = f"download.{ext}"
 
         def generate():
-            with open(filename, "rb") as f:
-                while chunk := f.read(65536):
-                    yield chunk
-            cleanup(cookie_file=cookie_file, tmpdir=tmpdir)
+            try:
+                with open(filename, "rb") as f:
+                    while True:
+                        chunk = f.read(65536)
+                        if not chunk:
+                            break
+                        yield chunk
+            finally:
+                cleanup(cookie_file=cookie_file, tmpdir=tmpdir)
 
         headers = {
             "Content-Disposition": safe_content_disposition(final_name),
@@ -186,6 +201,51 @@ def download():
     except Exception as e:
         cleanup(cookie_file=cookie_file, tmpdir=tmpdir)
         return jsonify({"error": str(e)}), 500
+
+@app.route("/debug", methods=["POST"])
+def debug():
+    """Endpoint de debug — lista formatos disponíveis para uma URL."""
+    data = request.get_json()
+    url = data.get("url")
+    cookies_txt = data.get("cookies", "")
+
+    if not url:
+        return jsonify({"error": "URL not provided"}), 400
+
+    cookie_file = write_cookie_file(cookies_txt)
+    try:
+        opts = make_opts(cookie_file, format_str="best")
+        opts["skip_download"] = True
+        opts["quiet"] = False
+
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+
+        formats = info.get("formats", [])
+        fmt_list = []
+        for f in formats:
+            fmt_list.append({
+                "id": f.get("format_id"),
+                "ext": f.get("ext"),
+                "resolution": f.get("resolution"),
+                "fps": f.get("fps"),
+                "vcodec": f.get("vcodec"),
+                "acodec": f.get("acodec"),
+                "abr": f.get("abr"),
+                "filesize": f.get("filesize"),
+            })
+
+        return jsonify({
+            "yt_dlp_version": yt_dlp.version.__version__,
+            "title": info.get("title"),
+            "format_count": len(fmt_list),
+            "formats": fmt_list,
+            "has_cookies": bool(cookies_txt.strip()),
+        })
+    except Exception as e:
+        return jsonify({"error": str(e), "yt_dlp_version": yt_dlp.version.__version__}), 400
+    finally:
+        cleanup(cookie_file=cookie_file)
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
