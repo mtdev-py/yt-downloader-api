@@ -1,5 +1,4 @@
 import os
-import atexit
 import shutil
 import tempfile
 from flask import Flask, request, jsonify, render_template, Response
@@ -9,21 +8,6 @@ import unicodedata
 
 app = Flask(__name__)
 CORS(app)  # Permite requisições da extensão Chrome (origem diferente)
-
-# ── Cookies do YouTube via env var ──────────────────────────────────
-# No Railway: Settings > Variables > YOUTUBE_COOKIES = <conteúdo do cookies.txt>
-COOKIE_FILE = None
-_cookie_raw = os.environ.get("YOUTUBE_COOKIES", "").strip()
-if _cookie_raw:
-    _tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".txt",
-                                       delete=False, encoding="utf-8")
-    _tmp.write(_cookie_raw)
-    _tmp.close()
-    COOKIE_FILE = _tmp.name
-    print(f"[cookies] Usando cookie file: {COOKIE_FILE}")
-    atexit.register(lambda: os.unlink(COOKIE_FILE) if os.path.exists(COOKIE_FILE) else None)
-else:
-    print("[cookies] Sem YOUTUBE_COOKIES definido — tentando sem autenticacao")
 
 def sanitize_filename(name: str) -> str:
     # Normaliza unicode (ex: é -> e) e remove caracteres inválidos
@@ -43,7 +27,7 @@ def safe_content_disposition(filename: str) -> str:
         utf8_name  = quote(filename, safe="")
         return f'attachment; filename="{ascii_name}"; filename*=UTF-8\'\'{utf8_name}'
 
-# Clientes a tentar em sequência (funciona em servidor cloud sem cookies)
+# Clientes a tentar em sequência
 YT_CLIENTS = [
     ["ios"],
     ["android_embedded"],
@@ -52,13 +36,23 @@ YT_CLIENTS = [
     ["android", "web"],
 ]
 
-def base_ydl_opts(tmpdir=None, player_clients=None):
+def write_cookie_file(cookies_txt):
+    """Escreve cookies recebidos da extensão em um arquivo temporário."""
+    if not cookies_txt or not cookies_txt.strip():
+        return None
+    tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".txt",
+                                      delete=False, encoding="utf-8")
+    tmp.write(cookies_txt)
+    tmp.close()
+    return tmp.name
+
+def base_ydl_opts(tmpdir=None, cookie_file=None):
     opts = {
         "quiet": True,
         "no_warnings": True,
         "extractor_args": {
             "youtube": {
-                "player_client": player_clients or ["ios"],
+                "player_client": ["ios"],
                 "player_skip": ["webpage", "configs"],
             }
         },
@@ -72,8 +66,8 @@ def base_ydl_opts(tmpdir=None, player_clients=None):
         "retries": 5,
         "fragment_retries": 5,
     }
-    if COOKIE_FILE:
-        opts["cookiefile"] = COOKIE_FILE
+    if cookie_file:
+        opts["cookiefile"] = cookie_file
     if tmpdir:
         opts["outtmpl"] = os.path.join(tmpdir, "%(title)s.%(ext)s")
     return opts
@@ -99,9 +93,9 @@ def try_extract(url, opts):
             continue
 
     raise Exception(
-        f"Não foi possível processar o vídeo. "
-        f"Pode ser conteúdo restrito ou temporariamente indisponível. "
-        f"Detalhe: {last_error}"
+        f"Could not process this video. "
+        f"It may be restricted or temporarily unavailable. "
+        f"Detail: {last_error}"
     )
 
 @app.route("/")
@@ -112,42 +106,49 @@ def index():
 def info():
     data = request.get_json()
     url = data.get("url")
+    cookies_txt = data.get("cookies", "")
     if not url:
-        return jsonify({"error": "URL não informada"}), 400
+        return jsonify({"error": "URL not provided"}), 400
 
-    opts = base_ydl_opts()
-    opts["skip_download"] = True
-
+    cookie_file = write_cookie_file(cookies_txt)
     try:
+        opts = base_ydl_opts(cookie_file=cookie_file)
+        opts["skip_download"] = True
+
         info = try_extract(url, opts)
+
+        duration = info.get("duration", 0)
+        minutes, seconds = divmod(int(duration), 60)
+
+        return jsonify({
+            "id":        info.get("id"),
+            "title":     info.get("title"),
+            "thumbnail": info.get("thumbnail"),
+            "uploader":  info.get("uploader"),
+            "duration":  f"{minutes}:{seconds:02d}",
+        })
     except Exception as e:
         return jsonify({"error": str(e)}), 400
-
-    duration = info.get("duration", 0)
-    minutes, seconds = divmod(int(duration), 60)
-
-    return jsonify({
-        "id":        info.get("id"),
-        "title":     info.get("title"),
-        "thumbnail": info.get("thumbnail"),
-        "uploader":  info.get("uploader"),
-        "duration":  f"{minutes}:{seconds:02d}",
-    })
+    finally:
+        if cookie_file and os.path.exists(cookie_file):
+            os.unlink(cookie_file)
 
 @app.route("/download", methods=["POST"])
 def download():
-    url       = request.form.get("url")
-    mode      = request.form.get("mode", "audio")
-    quality   = request.form.get("quality", "192")
-    fmt       = request.form.get("fmt", "mp3")
-    video_fmt = request.form.get("video_fmt", "mp4")
+    url         = request.form.get("url")
+    mode        = request.form.get("mode", "audio")
+    quality     = request.form.get("quality", "192")
+    fmt         = request.form.get("fmt", "mp3")
+    video_fmt   = request.form.get("video_fmt", "mp4")
+    cookies_txt = request.form.get("cookies", "")
 
     if not url:
-        return "URL não informada", 400
+        return "URL not provided", 400
 
+    cookie_file = write_cookie_file(cookies_txt)
     tmpdir = tempfile.mkdtemp(prefix="dl_")
     try:
-        opts = base_ydl_opts(tmpdir)
+        opts = base_ydl_opts(tmpdir, cookie_file=cookie_file)
 
         if mode == "audio":
             opts["format"] = "bestaudio[ext=webm]/bestaudio[ext=m4a]/bestaudio/best"
@@ -194,6 +195,8 @@ def download():
                 shutil.rmtree(tmpdir)
             except Exception:
                 pass
+            if cookie_file and os.path.exists(cookie_file):
+                os.unlink(cookie_file)
 
         headers = {
             "Content-Disposition": safe_content_disposition(final_name),
@@ -206,6 +209,8 @@ def download():
             shutil.rmtree(tmpdir)
         except Exception:
             pass
+        if cookie_file and os.path.exists(cookie_file):
+            os.unlink(cookie_file)
         return jsonify({"error": str(e)}), 500
 
 if __name__ == "__main__":
