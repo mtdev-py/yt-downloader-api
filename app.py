@@ -27,16 +27,6 @@ def safe_content_disposition(filename: str) -> str:
         utf8_name  = quote(filename, safe="")
         return f'attachment; filename="{ascii_name}"; filename*=UTF-8\'\'{utf8_name}'
 
-# Clientes a tentar em sequência
-# Com cookies, 'web' tem todos os formatos; sem cookies, fallback para mobile clients
-YT_CLIENTS = [
-    ["web"],
-    ["android"],
-    ["ios"],
-    ["web_creator"],
-    ["tv_embedded"],
-]
-
 def write_cookie_file(cookies_txt):
     """Escreve cookies recebidos da extensão em um arquivo temporário."""
     if not cookies_txt or not cookies_txt.strip():
@@ -51,19 +41,6 @@ def base_ydl_opts(tmpdir=None, cookie_file=None):
     opts = {
         "quiet": True,
         "no_warnings": True,
-        "extractor_args": {
-            "youtube": {
-                "player_client": ["ios"],
-                "player_skip": ["webpage", "configs"],
-            }
-        },
-        "http_headers": {
-            "User-Agent": (
-                "Mozilla/5.0 (Linux; Android 14; Pixel 8) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/124.0.6367.82 Mobile Safari/537.36"
-            ),
-        },
         "retries": 5,
         "fragment_retries": 5,
     }
@@ -74,30 +51,36 @@ def base_ydl_opts(tmpdir=None, cookie_file=None):
     return opts
 
 def try_extract(url, opts):
-    """Tenta múltiplos player_clients do YouTube até um funcionar."""
-    last_error = None
+    """Tenta extrair: primeiro default (com cookies), depois clientes alternativos."""
+    # Tentativa 1: yt-dlp padrão (melhor quando autenticado com cookies)
+    try:
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            is_dl = "outtmpl" in opts and not opts.get("skip_download", False)
+            return ydl.extract_info(url, download=is_dl)
+    except Exception as e:
+        first_error = e
+        print(f"[extract] Default failed: {e}")
 
-    for clients in YT_CLIENTS:
+    # Tentativa 2: clientes alternativos (fallback sem cookies)
+    for client in ["ios", "android", "web_creator"]:
         try:
             opts_copy = dict(opts)
             opts_copy["extractor_args"] = {
-                "youtube": {
-                    "player_client": clients,
-                    "player_skip": ["webpage", "configs"],
-                }
+                "youtube": { "player_client": [client] }
             }
             with yt_dlp.YoutubeDL(opts_copy) as ydl:
-                is_download = "outtmpl" in opts_copy and not opts_copy.get("skip_download", False)
-                return ydl.extract_info(url, download=is_download)
+                is_dl = "outtmpl" in opts_copy and not opts_copy.get("skip_download", False)
+                return ydl.extract_info(url, download=is_dl)
         except Exception as e:
-            last_error = e
+            print(f"[extract] Client '{client}' failed: {e}")
             continue
 
     raise Exception(
         f"Could not process this video. "
         f"It may be restricted or temporarily unavailable. "
-        f"Detail: {last_error}"
+        f"Detail: {first_error}"
     )
+
 
 @app.route("/")
 def index():
