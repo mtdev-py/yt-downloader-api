@@ -1,4 +1,5 @@
 import os
+import atexit
 import shutil
 import tempfile
 from flask import Flask, request, jsonify, render_template, Response
@@ -9,7 +10,20 @@ import unicodedata
 app = Flask(__name__)
 CORS(app)  # Permite requisições da extensão Chrome (origem diferente)
 
-BROWSERS = ["edge", "chrome", "firefox", "brave", "opera", "chromium", "vivaldi"]
+# ── Cookies do YouTube via env var ──────────────────────────────────
+# No Railway: Settings > Variables > YOUTUBE_COOKIES = <conteúdo do cookies.txt>
+COOKIE_FILE = None
+_cookie_raw = os.environ.get("YOUTUBE_COOKIES", "").strip()
+if _cookie_raw:
+    _tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".txt",
+                                       delete=False, encoding="utf-8")
+    _tmp.write(_cookie_raw)
+    _tmp.close()
+    COOKIE_FILE = _tmp.name
+    print(f"[cookies] Usando cookie file: {COOKIE_FILE}")
+    atexit.register(lambda: os.unlink(COOKIE_FILE) if os.path.exists(COOKIE_FILE) else None)
+else:
+    print("[cookies] Sem YOUTUBE_COOKIES definido — tentando sem autenticacao")
 
 def sanitize_filename(name: str) -> str:
     # Normaliza unicode (ex: é -> e) e remove caracteres inválidos
@@ -58,6 +72,8 @@ def base_ydl_opts(tmpdir=None, player_clients=None):
         "retries": 5,
         "fragment_retries": 5,
     }
+    if COOKIE_FILE:
+        opts["cookiefile"] = COOKIE_FILE
     if tmpdir:
         opts["outtmpl"] = os.path.join(tmpdir, "%(title)s.%(ext)s")
     return opts
