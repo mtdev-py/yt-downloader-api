@@ -111,62 +111,35 @@ def download():
     tmpdir = tempfile.mkdtemp(prefix="dl_")
 
     try:
-        # Determinar formatos a tentar (do mais específico ao mais genérico)
+        opts = make_opts(cookie_file, tmpdir, format_str="best")
+
         if mode_ == "audio":
-            format_attempts = ["bestaudio/best", "best"]
-            postprocessors = [
+            opts["format"] = "bestaudio/best"
+            opts["postprocessors"] = [
                 {"key": "FFmpegExtractAudio", "preferredcodec": fmt, "preferredquality": quality},
                 {"key": "FFmpegMetadata", "add_metadata": True},
             ]
             mime = "audio/mp4" if fmt == "m4a" else "audio/mpeg"
             ext = fmt
         else:
-            format_attempts = ["bestvideo+bestaudio/best", "bestvideo+bestaudio", "best"]
-            postprocessors = []
+            opts["format"] = "bestvideo+bestaudio/best"
+            opts["merge_output_format"] = video_fmt
             mime = "video/mp4"
             ext = video_fmt
 
-        # Tentar cada formato até um funcionar
-        info_dict = None
-        last_error = None
+        # Single call — extract + download in one step (like yt-dlp CLI)
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            info_dict = ydl.extract_info(url, download=True)
 
-        for format_str in format_attempts:
-            try:
-                opts = make_opts(cookie_file, tmpdir, format_str)
-                if postprocessors:
-                    opts["postprocessors"] = postprocessors
-                if mode_ == "video":
-                    opts["merge_output_format"] = video_fmt
-
-                # Step 1: extract_info
-                with yt_dlp.YoutubeDL(opts) as ydl:
-                    info_dict = ydl.extract_info(url, download=False)
-
-                # Step 2: download
-                with yt_dlp.YoutubeDL(opts) as ydl:
-                    ydl.download([url])
-
-                break  # sucesso
-            except Exception as e:
-                last_error = e
-                # Limpar tmpdir para a próxima tentativa
-                for f in os.listdir(tmpdir):
-                    try: os.unlink(os.path.join(tmpdir, f))
-                    except: pass
-                continue
-
-        if info_dict is None:
-            raise last_error or Exception("All format attempts failed")
-
-        # Step 3: encontrar arquivo — scan tmpdir por arquivo resultante
+        # Find downloaded file
         filename = None
         files = [f for f in os.listdir(tmpdir) if not f.endswith(".part") and not f.endswith(".temp")]
         if files:
-            # Pegar o maior arquivo (o resultado final)
             filename = os.path.join(tmpdir, max(files, key=lambda f: os.path.getsize(os.path.join(tmpdir, f))))
 
         if not filename or not os.path.exists(filename):
             return jsonify({"error": "File not found after processing"}), 500
+
 
 
         title = info_dict.get("title", "download")
