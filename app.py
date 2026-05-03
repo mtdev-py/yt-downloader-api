@@ -93,6 +93,67 @@ def try_extract(url, opts):
 def index():
     return render_template("index.html")
 
+@app.route("/test-proxy", methods=["GET"])
+def test_proxy():
+    """Test if the residential proxy is working from Railway."""
+    import requests as req
+    PROXY = "http://b2eac90fa0783f06acd6__cr.br:b58b7ea3fafc8b71@67.213.114.47:823"
+    results = {}
+
+    # 1. Railway's real IP
+    try:
+        r = req.get("https://httpbin.org/ip", timeout=10)
+        results["railway_ip"] = r.json()
+    except Exception as e:
+        results["railway_ip_error"] = str(e)
+
+    # 2. IP through proxy
+    try:
+        r = req.get("https://httpbin.org/ip", proxies={"http": PROXY, "https": PROXY}, timeout=15)
+        results["proxy_ip"] = r.json()
+        results["proxy_works"] = True
+    except Exception as e:
+        results["proxy_ip_error"] = str(e)
+        results["proxy_works"] = False
+
+    # 3. yt-dlp with proxy — test format extraction
+    try:
+        opts = {
+            "quiet": True, "no_warnings": True,
+            "proxy": PROXY,
+            "skip_download": True,
+            "ignore_no_formats_error": True,
+        }
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            info = ydl.extract_info("https://www.youtube.com/watch?v=dQw4w9WgXcQ", download=False)
+        fmts = info.get("formats", [])
+        audio_fmts = [f for f in fmts if f.get("acodec") != "none" and f.get("vcodec") == "none"]
+        results["ytdlp_proxy"] = {
+            "total_formats": len(fmts),
+            "audio_formats": len(audio_fmts),
+            "title": info.get("title"),
+        }
+    except Exception as e:
+        results["ytdlp_proxy_error"] = str(e)
+
+    # 4. yt-dlp WITHOUT proxy for comparison
+    try:
+        opts2 = {
+            "quiet": True, "no_warnings": True,
+            "skip_download": True,
+            "ignore_no_formats_error": True,
+        }
+        with yt_dlp.YoutubeDL(opts2) as ydl:
+            info2 = ydl.extract_info("https://www.youtube.com/watch?v=dQw4w9WgXcQ", download=False)
+        fmts2 = info2.get("formats", [])
+        results["ytdlp_no_proxy"] = {
+            "total_formats": len(fmts2),
+        }
+    except Exception as e:
+        results["ytdlp_no_proxy_error"] = str(e)
+
+    return jsonify(results)
+
 @app.route("/convert", methods=["POST"])
 def convert():
     """Receive raw audio blob from extension, convert with FFmpeg."""
