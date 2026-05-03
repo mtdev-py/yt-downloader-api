@@ -41,12 +41,6 @@ def base_ydl_opts(cookie_file, tmpdir=None):
         "quiet": True,
         "no_warnings": True,
         "cookiefile": cookie_file,
-        "extractor_args": {
-            "youtube": {
-                "player_client": ["android", "web"],
-                "player_skip": ["webpage", "configs"],
-            }
-        },
         "http_headers": {
             "User-Agent": (
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -58,6 +52,7 @@ def base_ydl_opts(cookie_file, tmpdir=None):
         "fragment_retries": 10,
         "geo_bypass": True,
         "nocheckcertificate": True,
+        "allow_unplayable_formats": True,
     }
     if tmpdir:
         opts["outtmpl"] = os.path.join(tmpdir, "%(title)s.%(ext)s")
