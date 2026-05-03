@@ -158,25 +158,16 @@ def download():
         if info_dict is None:
             raise last_error or Exception("All format attempts failed")
 
-        # Step 3: encontrar arquivo
-        with yt_dlp.YoutubeDL(opts) as ydl:
-            filename = ydl.prepare_filename(info_dict)
+        # Step 3: encontrar arquivo — scan tmpdir por arquivo resultante
+        filename = None
+        files = [f for f in os.listdir(tmpdir) if not f.endswith(".part") and not f.endswith(".temp")]
+        if files:
+            # Pegar o maior arquivo (o resultado final)
+            filename = os.path.join(tmpdir, max(files, key=lambda f: os.path.getsize(os.path.join(tmpdir, f))))
 
-        if not os.path.exists(filename):
-            base = os.path.splitext(filename)[0]
-            for e in [ext, "mp3", "m4a", "mp4", "webm", "opus", "ogg", "mkv"]:
-                alt = f"{base}.{e}"
-                if os.path.exists(alt):
-                    filename = alt
-                    break
-
-        if not os.path.exists(filename):
-            files = [f for f in os.listdir(tmpdir) if not f.endswith(".part")]
-            if files:
-                filename = os.path.join(tmpdir, sorted(files, key=lambda x: os.path.getsize(os.path.join(tmpdir, x)), reverse=True)[0])
-
-        if not os.path.exists(filename):
+        if not filename or not os.path.exists(filename):
             return jsonify({"error": "File not found after processing"}), 500
+
 
         title = info_dict.get("title", "download")
         final_name = sanitize_filename(title) + f".{ext}"
