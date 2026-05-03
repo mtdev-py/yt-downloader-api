@@ -86,6 +86,73 @@ def try_extract(url, opts):
 def index():
     return render_template("index.html")
 
+@app.route("/convert", methods=["POST"])
+def convert():
+    """Receive raw audio blob from extension, convert with FFmpeg."""
+    audio_file = request.files.get("audio")
+    fmt = request.form.get("fmt", "mp3")
+    quality = request.form.get("quality", "192")
+    title = request.form.get("title", "audio")
+
+    if not audio_file:
+        return jsonify({"error": "No audio file provided"}), 400
+
+    tmpdir = tempfile.mkdtemp(prefix="conv_")
+    try:
+        # Save uploaded audio
+        input_ext = audio_file.filename.rsplit(".", 1)[-1] if "." in audio_file.filename else "webm"
+        input_path = os.path.join(tmpdir, f"input.{input_ext}")
+        audio_file.save(input_path)
+
+        output_path = os.path.join(tmpdir, f"output.{fmt}")
+
+        # Convert with FFmpeg
+        import subprocess
+        cmd = ["ffmpeg", "-i", input_path, "-y"]
+        if fmt == "mp3":
+            cmd += ["-codec:a", "libmp3lame", "-b:a", f"{quality}k"]
+        elif fmt == "m4a":
+            cmd += ["-codec:a", "aac", "-b:a", f"{quality}k"]
+        elif fmt == "opus":
+            cmd += ["-codec:a", "libopus", "-b:a", f"{quality}k"]
+        elif fmt == "flac":
+            cmd += ["-codec:a", "flac"]
+        elif fmt == "wav":
+            cmd += ["-codec:a", "pcm_s16le"]
+        else:
+            cmd += ["-codec:a", "libmp3lame", "-b:a", f"{quality}k"]
+            fmt = "mp3"
+
+        cmd.append(output_path)
+        result = subprocess.run(cmd, capture_output=True, timeout=120)
+
+        if not os.path.exists(output_path):
+            return jsonify({"error": f"FFmpeg conversion failed: {result.stderr.decode()[-200:]}"}), 500
+
+        final_name = sanitize_filename(title) + f".{fmt}"
+        mime = "audio/mp4" if fmt == "m4a" else "audio/mpeg"
+
+        def generate():
+            try:
+                with open(output_path, "rb") as f:
+                    while True:
+                        chunk = f.read(65536)
+                        if not chunk:
+                            break
+                        yield chunk
+            finally:
+                cleanup(tmpdir=tmpdir)
+
+        headers = {
+            "Content-Disposition": safe_content_disposition(final_name),
+            "Content-Length": str(os.path.getsize(output_path)),
+        }
+        return Response(generate(), headers=headers, mimetype=mime)
+
+    except Exception as e:
+        cleanup(tmpdir=tmpdir)
+        return jsonify({"error": str(e)}), 500
+
 @app.route("/info", methods=["POST"])
 def info():
     data = request.get_json()
