@@ -111,7 +111,7 @@ def download():
         }
 
         if mode_ == "audio":
-            opts["format"] = "bestaudio/best"
+            opts["format"] = "best"
             opts["postprocessors"] = [
                 {"key": "FFmpegExtractAudio", "preferredcodec": fmt, "preferredquality": quality},
                 {"key": "FFmpegMetadata", "add_metadata": True},
@@ -119,7 +119,7 @@ def download():
             mime = "audio/mp4" if fmt == "m4a" else "audio/mpeg"
             ext = fmt
         else:
-            opts["format"] = "bestvideo+bestaudio/best"
+            opts["format"] = "best"
             opts["merge_output_format"] = video_fmt
             mime = "video/mp4"
             ext = video_fmt
