@@ -9,18 +9,15 @@ import unicodedata
 app = Flask(__name__)
 CORS(app)
 
-# ── Helpers ───────────────────────────────────────────
-
-def sanitize_filename(name: str) -> str:
+def sanitize_filename(name):
     name = unicodedata.normalize("NFKD", name)
     name = name.encode("ascii", "ignore").decode("ascii")
     return "".join(c for c in name if c.isalnum() or c in " .-_()[]{}").strip() or "download"
 
-def safe_content_disposition(filename: str) -> str:
+def safe_content_disposition(filename):
     from urllib.parse import quote
     ascii_name = unicodedata.normalize("NFKD", filename).encode("ascii", "ignore").decode("ascii").strip() or "download"
-    utf8_name = quote(filename, safe="")
-    return f'attachment; filename="{ascii_name}"; filename*=UTF-8\'\'{utf8_name}'
+    return f'attachment; filename="{ascii_name}"; filename*=UTF-8\'\'{quote(filename, safe="")}'
 
 def write_cookie_file(cookies_txt):
     if not cookies_txt or not cookies_txt.strip():
@@ -35,24 +32,6 @@ def cleanup(cookie_file=None, tmpdir=None):
         os.unlink(cookie_file)
     if tmpdir and os.path.exists(tmpdir):
         shutil.rmtree(tmpdir, ignore_errors=True)
-
-def make_opts(cookie_file, tmpdir=None, format_str="best"):
-    """Cria opções yt-dlp. SEM extractor_args — deixa yt-dlp decidir o client."""
-    opts = {
-        "quiet": True,
-        "no_warnings": True,
-        "retries": 5,
-        "fragment_retries": 5,
-        "format": format_str,
-        "geo_bypass": True,
-        "nocheckcertificate": True,
-        "cookiefile": cookie_file,
-    }
-    if tmpdir:
-        opts["outtmpl"] = os.path.join(tmpdir, "%(title)s.%(ext)s")
-    return opts
-
-# ── Routes ────────────────────────────────────────────
 
 @app.route("/")
 def index():
@@ -71,9 +50,17 @@ def info():
 
     cookie_file = write_cookie_file(cookies_txt)
     try:
-        # Info: sem format, sem download — só metadados
-        opts = make_opts(cookie_file, format_str="best")
-        opts["skip_download"] = True
+        # Info only — NO format, NO download validation
+        opts = {
+            "quiet": True,
+            "no_warnings": True,
+            "cookiefile": cookie_file,
+            "skip_download": True,
+            "geo_bypass": True,
+            "nocheckcertificate": True,
+            "extract_flat": False,
+            "ignore_no_formats_error": True,
+        }
 
         with yt_dlp.YoutubeDL(opts) as ydl:
             result = ydl.extract_info(url, download=False)
@@ -105,13 +92,23 @@ def download():
     if not url:
         return jsonify({"error": "URL not provided"}), 400
     if not cookies_txt or not cookies_txt.strip():
-        return jsonify({"error": "Cookies required. Install the Chrome extension and login to YouTube."}), 400
+        return jsonify({"error": "Cookies required."}), 400
 
     cookie_file = write_cookie_file(cookies_txt)
     tmpdir = tempfile.mkdtemp(prefix="dl_")
 
     try:
-        opts = make_opts(cookie_file, tmpdir, format_str="best")
+        # Base opts — exactly like the user's working local script
+        opts = {
+            "quiet": True,
+            "no_warnings": True,
+            "cookiefile": cookie_file,
+            "geo_bypass": True,
+            "nocheckcertificate": True,
+            "retries": 5,
+            "fragment_retries": 5,
+            "outtmpl": os.path.join(tmpdir, "%(title)s.%(ext)s"),
+        }
 
         if mode_ == "audio":
             opts["format"] = "bestaudio/best"
@@ -127,20 +124,18 @@ def download():
             mime = "video/mp4"
             ext = video_fmt
 
-        # Single call — extract + download in one step (like yt-dlp CLI)
+        # Single call — extract + download (like yt-dlp CLI)
         with yt_dlp.YoutubeDL(opts) as ydl:
             info_dict = ydl.extract_info(url, download=True)
 
-        # Find downloaded file
+        # Find file
         filename = None
-        files = [f for f in os.listdir(tmpdir) if not f.endswith(".part") and not f.endswith(".temp")]
+        files = [f for f in os.listdir(tmpdir) if not f.endswith((".part", ".temp", ".ytdl"))]
         if files:
             filename = os.path.join(tmpdir, max(files, key=lambda f: os.path.getsize(os.path.join(tmpdir, f))))
 
         if not filename or not os.path.exists(filename):
             return jsonify({"error": "File not found after processing"}), 500
-
-
 
         title = info_dict.get("title", "download")
         final_name = sanitize_filename(title) + f".{ext}"
@@ -168,7 +163,6 @@ def download():
 
 @app.route("/debug", methods=["POST"])
 def debug():
-    """Endpoint de debug — lista formatos disponíveis para uma URL."""
     data = request.get_json()
     url = data.get("url")
     cookies_txt = data.get("cookies", "")
@@ -178,26 +172,29 @@ def debug():
 
     cookie_file = write_cookie_file(cookies_txt)
     try:
-        opts = make_opts(cookie_file, format_str="best")
-        opts["skip_download"] = True
-        opts["quiet"] = False
+        opts = {
+            "quiet": False,
+            "no_warnings": False,
+            "cookiefile": cookie_file,
+            "skip_download": True,
+            "geo_bypass": True,
+            "nocheckcertificate": True,
+            "ignore_no_formats_error": True,
+        }
 
         with yt_dlp.YoutubeDL(opts) as ydl:
             info = ydl.extract_info(url, download=False)
 
         formats = info.get("formats", [])
-        fmt_list = []
-        for f in formats:
-            fmt_list.append({
-                "id": f.get("format_id"),
-                "ext": f.get("ext"),
-                "resolution": f.get("resolution"),
-                "fps": f.get("fps"),
-                "vcodec": f.get("vcodec"),
-                "acodec": f.get("acodec"),
-                "abr": f.get("abr"),
-                "filesize": f.get("filesize"),
-            })
+        fmt_list = [{
+            "id": f.get("format_id"),
+            "ext": f.get("ext"),
+            "resolution": f.get("resolution"),
+            "vcodec": f.get("vcodec"),
+            "acodec": f.get("acodec"),
+            "abr": f.get("abr"),
+            "filesize": f.get("filesize"),
+        } for f in formats]
 
         return jsonify({
             "yt_dlp_version": yt_dlp.version.__version__,
