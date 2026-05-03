@@ -98,35 +98,61 @@ def download():
     tmpdir = tempfile.mkdtemp(prefix="dl_")
 
     try:
-        # Base opts — exactly like the user's working local script
-        opts = {
-            "quiet": True,
-            "no_warnings": True,
-            "cookiefile": cookie_file,
-            "geo_bypass": True,
-            "nocheckcertificate": True,
-            "retries": 5,
-            "fragment_retries": 5,
-            "outtmpl": os.path.join(tmpdir, "%(title)s.%(ext)s"),
-        }
+        # Player clients to try — different clients bypass different restrictions
+        client_attempts = [
+            ["web"],
+            ["ios"],
+            ["android"],
+            ["tv_embedded"],
+            ["web", "ios", "android"],
+        ]
 
-        if mode_ == "audio":
-            opts["format"] = "best"
-            opts["postprocessors"] = [
-                {"key": "FFmpegExtractAudio", "preferredcodec": fmt, "preferredquality": quality},
-                {"key": "FFmpegMetadata", "add_metadata": True},
-            ]
-            mime = "audio/mp4" if fmt == "m4a" else "audio/mpeg"
-            ext = fmt
+        last_error = None
+
+        for clients in client_attempts:
+            # Clean tmpdir between attempts
+            for f in os.listdir(tmpdir):
+                try: os.unlink(os.path.join(tmpdir, f))
+                except: pass
+
+            opts = {
+                "quiet": True,
+                "no_warnings": True,
+                "cookiefile": cookie_file,
+                "geo_bypass": True,
+                "nocheckcertificate": True,
+                "retries": 3,
+                "fragment_retries": 3,
+                "outtmpl": os.path.join(tmpdir, "%(title)s.%(ext)s"),
+                "hls_prefer_native": True,
+                "extractor_args": {"youtube": {"player_client": clients}},
+            }
+
+            if mode_ == "audio":
+                opts["format"] = "best"
+                opts["postprocessors"] = [
+                    {"key": "FFmpegExtractAudio", "preferredcodec": fmt, "preferredquality": quality},
+                    {"key": "FFmpegMetadata", "add_metadata": True},
+                ]
+                mime = "audio/mp4" if fmt == "m4a" else "audio/mpeg"
+                ext = fmt
+            else:
+                opts["format"] = "best"
+                opts["merge_output_format"] = video_fmt
+                mime = "video/mp4"
+                ext = video_fmt
+
+            try:
+                with yt_dlp.YoutubeDL(opts) as ydl:
+                    info_dict = ydl.extract_info(url, download=True)
+                break  # success!
+            except Exception as e:
+                last_error = e
+                continue
+
         else:
-            opts["format"] = "best"
-            opts["merge_output_format"] = video_fmt
-            mime = "video/mp4"
-            ext = video_fmt
-
-        # Single call — extract + download (like yt-dlp CLI)
-        with yt_dlp.YoutubeDL(opts) as ydl:
-            info_dict = ydl.extract_info(url, download=True)
+            # All attempts failed
+            raise last_error or Exception("All player client attempts failed")
 
         # Find file
         filename = None
@@ -172,35 +198,54 @@ def debug():
 
     cookie_file = write_cookie_file(cookies_txt)
     try:
-        opts = {
-            "quiet": False,
-            "no_warnings": False,
-            "cookiefile": cookie_file,
-            "skip_download": True,
-            "geo_bypass": True,
-            "nocheckcertificate": True,
-            "ignore_no_formats_error": True,
-        }
+        clients_to_test = ["web", "ios", "android", "tv_embedded"]
+        results = {}
 
-        with yt_dlp.YoutubeDL(opts) as ydl:
-            info = ydl.extract_info(url, download=False)
+        for client in clients_to_test:
+            try:
+                opts = {
+                    "quiet": True,
+                    "no_warnings": True,
+                    "cookiefile": cookie_file,
+                    "skip_download": True,
+                    "geo_bypass": True,
+                    "nocheckcertificate": True,
+                    "ignore_no_formats_error": True,
+                    "extractor_args": {"youtube": {"player_client": [client]}},
+                }
+                with yt_dlp.YoutubeDL(opts) as ydl:
+                    info = ydl.extract_info(url, download=False)
+                fmts = info.get("formats", [])
+                downloadable = [f for f in fmts if f.get("url")]
+                results[client] = {
+                    "total": len(fmts),
+                    "downloadable": len(downloadable),
+                    "formats": [{"id": f.get("format_id"), "ext": f.get("ext"), "res": f.get("resolution"), "acodec": f.get("acodec"), "vcodec": f.get("vcodec"), "url_ok": bool(f.get("url"))} for f in fmts[:10]],
+                }
+            except Exception as e:
+                results[client] = {"error": str(e)}
 
-        formats = info.get("formats", [])
-        fmt_list = [{
-            "id": f.get("format_id"),
-            "ext": f.get("ext"),
-            "resolution": f.get("resolution"),
-            "vcodec": f.get("vcodec"),
-            "acodec": f.get("acodec"),
-            "abr": f.get("abr"),
-            "filesize": f.get("filesize"),
-        } for f in formats]
+        # Also get title from first working client
+        title = "unknown"
+        for client in clients_to_test:
+            if "error" not in results.get(client, {}):
+                try:
+                    opts = {
+                        "quiet": True, "cookiefile": cookie_file,
+                        "skip_download": True, "ignore_no_formats_error": True,
+                        "extractor_args": {"youtube": {"player_client": [client]}},
+                    }
+                    with yt_dlp.YoutubeDL(opts) as ydl:
+                        info = ydl.extract_info(url, download=False)
+                    title = info.get("title", "unknown")
+                    break
+                except:
+                    pass
 
         return jsonify({
             "yt_dlp_version": yt_dlp.version.__version__,
-            "title": info.get("title"),
-            "format_count": len(fmt_list),
-            "formats": fmt_list,
+            "title": title,
+            "clients": results,
             "has_cookies": bool(cookies_txt.strip()),
         })
     except Exception as e:
