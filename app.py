@@ -36,11 +36,14 @@ def cleanup(cookie_file=None, tmpdir=None):
         shutil.rmtree(tmpdir, ignore_errors=True)
 
 def base_ydl_opts(cookie_file, tmpdir=None):
-    """Opções base — modelado do código local que funciona."""
+    """Opções base com proxy residencial."""
+    PROXY = "http://b2eac90fa0783f06acd6__cr.br:b58b7ea3fafc8b71@67.213.114.47:823"
+
     opts = {
         "quiet": True,
         "no_warnings": True,
         "cookiefile": cookie_file,
+        "proxy": PROXY,
         "http_headers": {
             "User-Agent": (
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -52,7 +55,11 @@ def base_ydl_opts(cookie_file, tmpdir=None):
         "fragment_retries": 10,
         "geo_bypass": True,
         "nocheckcertificate": True,
-        "allow_unplayable_formats": True,
+        "extractor_args": {
+            "youtube": {
+                "player_client": ["android", "web"],
+            }
+        },
     }
     if tmpdir:
         opts["outtmpl"] = os.path.join(tmpdir, "%(title)s.%(ext)s")
@@ -286,9 +293,11 @@ def debug():
 
         for client in clients_to_test:
             try:
+                PROXY = "http://b2eac90fa0783f06acd6__cr.br:b58b7ea3fafc8b71@67.213.114.47:823"
                 opts = {
                     "quiet": True, "no_warnings": True,
                     "cookiefile": cookie_file,
+                    "proxy": PROXY,
                     "skip_download": True,
                     "geo_bypass": True, "nocheckcertificate": True,
                     "ignore_no_formats_error": True,
