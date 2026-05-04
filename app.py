@@ -61,7 +61,7 @@ def base_ydl_opts(cookie_file, tmpdir=None):
         "nocheckcertificate": True,
     }
     if tmpdir:
-        opts["outtmpl"] = os.path.join(tmpdir, "%(title)s.%(ext)s")
+        opts["outtmpl"] = os.path.join(tmpdir, "%(id)s.%(ext)s")
     return opts
 
 def try_extract(url, opts):
