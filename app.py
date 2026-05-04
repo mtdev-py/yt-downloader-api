@@ -39,14 +39,13 @@ def cleanup(cookie_file=None, tmpdir=None):
     if tmpdir and os.path.exists(tmpdir):
         shutil.rmtree(tmpdir, ignore_errors=True)
 
-def base_ydl_opts(cookie_file, tmpdir=None):
-    """Opções base com proxy residencial."""
+def base_ydl_opts(tmpdir=None):
+    """Opções base com proxy residencial. Cookies não são necessários."""
     PROXY = "http://b2eac90fa0783f06acd6__cr.br:b58b7ea3fafc8b71@67.213.114.47:823"
 
     opts = {
         "quiet": True,
         "no_warnings": True,
-        "cookiefile": cookie_file,
         "proxy": PROXY,
         "http_headers": {
             "User-Agent": (
@@ -231,7 +230,7 @@ def info():
 
     cookie_file = write_cookie_file(cookies_txt)
     try:
-        opts = base_ydl_opts(cookie_file)
+        opts = base_ydl_opts()
         opts["skip_download"] = True
 
         result = try_extract(url, opts)
@@ -267,7 +266,7 @@ def download():
     tmpdir = tempfile.mkdtemp(prefix="dl_")
 
     try:
-        opts = base_ydl_opts(cookie_file, tmpdir)
+        opts = base_ydl_opts(tmpdir)
 
         if mode_ == "audio":
             # Fallback chain exata do código que funciona
