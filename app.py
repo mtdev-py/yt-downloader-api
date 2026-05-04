@@ -55,11 +55,6 @@ def base_ydl_opts(cookie_file, tmpdir=None):
         "fragment_retries": 10,
         "geo_bypass": True,
         "nocheckcertificate": True,
-        "extractor_args": {
-            "youtube": {
-                "player_client": ["android", "web"],
-            }
-        },
     }
     if tmpdir:
         opts["outtmpl"] = os.path.join(tmpdir, "%(title)s.%(ext)s")
