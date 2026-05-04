@@ -24,6 +24,10 @@ def safe_content_disposition(filename):
 def write_cookie_file(cookies_txt):
     if not cookies_txt or not cookies_txt.strip():
         return None
+    # Validate it looks like Netscape format
+    text = cookies_txt.strip()
+    if not (text.startswith("# Netscape") or text.startswith("# HTTP Cookie") or "\t" in text):
+        return None  # Invalid format, skip
     tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False, encoding="utf-8")
     tmp.write(cookies_txt)
     tmp.close()
@@ -224,8 +228,6 @@ def info():
 
     if not url:
         return jsonify({"error": "URL not provided"}), 400
-    if not cookies_txt or not cookies_txt.strip():
-        return jsonify({"error": "Cookies required. Login to YouTube first."}), 400
 
     cookie_file = write_cookie_file(cookies_txt)
     try:
@@ -260,8 +262,6 @@ def download():
 
     if not url:
         return jsonify({"error": "URL not provided"}), 400
-    if not cookies_txt or not cookies_txt.strip():
-        return jsonify({"error": "Cookies required."}), 400
 
     cookie_file = write_cookie_file(cookies_txt)
     tmpdir = tempfile.mkdtemp(prefix="dl_")
