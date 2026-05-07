@@ -41,7 +41,7 @@ def cleanup(cookie_file=None, tmpdir=None):
 
 def base_ydl_opts(tmpdir=None):
     """Opções base com proxy residencial. Cookies não são necessários."""
-    PROXY = "http://b2eac90fa0783f06acd6__cr.br:b58b7ea3fafc8b71@67.213.114.47:823"
+    PROXY = os.environ.get("PROXY_URL", "http://user:pass@proxy-host:port")
 
     opts = {
         "quiet": True,
@@ -288,7 +288,7 @@ def debug():
 
         for client in clients_to_test:
             try:
-                PROXY = "http://b2eac90fa0783f06acd6__cr.br:b58b7ea3fafc8b71@67.213.114.47:823"
+                PROXY = os.environ.get("PROXY_URL", "http://user:pass@proxy-host:port")
                 opts = {
                     "quiet": True, "no_warnings": True,
                     "cookiefile": cookie_file,
